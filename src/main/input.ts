@@ -1,52 +1,25 @@
 import { screen } from 'electron'
 
-// Try to load robotjs — optional native dependency
-let robot: {
-  moveMouse(x: number, y: number): void
-  mouseClick(button?: string, double?: boolean): void
-  mouseToggle(down: string, button?: string): void
-  scrollMouse(x: number, y: number): void
-  keyTap(key: string, modifier?: string | string[]): void
-} | null = null
+// Dynamically load @nut-tree/nut-js — optional native dep.
+// App still works (streaming only, no touch control) if unavailable.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let nutLib: any = null
 
 try {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  robot = require('robotjs')
-  console.log('[input] robotjs loaded — touch control enabled')
+  nutLib = require('@nut-tree-fork/nut-js')
+  nutLib.mouse.config.mouseSpeed = 9999 // instant movement, no animation
+  console.log('[input] @nut-tree/nut-js loaded — touch control enabled')
 } catch {
-  console.warn('[input] robotjs not available — touch control disabled')
+  console.warn('[input] @nut-tree/nut-js unavailable — touch control disabled')
 }
 
 export function isInputAvailable(): boolean {
-  return robot !== null
+  return nutLib !== null
 }
 
-export function injectMouseMove(normX: number, normY: number): void {
-  if (!robot) return
+function toPixel(normX: number, normY: number): unknown {
   const { width, height } = screen.getPrimaryDisplay().bounds
-  robot.moveMouse(Math.round(normX * width), Math.round(normY * height))
-}
-
-export function injectMouseDown(normX: number, normY: number, button: number): void {
-  if (!robot) return
-  const { width, height } = screen.getPrimaryDisplay().bounds
-  robot.moveMouse(Math.round(normX * width), Math.round(normY * height))
-  robot.mouseToggle('down', button === 2 ? 'right' : 'left')
-}
-
-export function injectMouseUp(normX: number, normY: number, button: number): void {
-  if (!robot) return
-  const { width, height } = screen.getPrimaryDisplay().bounds
-  robot.moveMouse(Math.round(normX * width), Math.round(normY * height))
-  robot.mouseToggle('up', button === 2 ? 'right' : 'left')
-}
-
-export function injectScroll(deltaX: number, deltaY: number): void {
-  if (!robot) return
-  robot.scrollMouse(
-    Math.round(-deltaX / 120),
-    Math.round(-deltaY / 120)
-  )
+  return new nutLib.Point(Math.round(normX * width), Math.round(normY * height))
 }
 
 export type InputMessage =
@@ -56,18 +29,33 @@ export type InputMessage =
   | { event: 'scroll'; deltaX: number; deltaY: number }
 
 export function handleInput(msg: InputMessage): void {
+  if (!nutLib) return
+  const { mouse, Button, straightTo } = nutLib
+
   switch (msg.event) {
     case 'mousemove':
-      injectMouseMove(msg.x, msg.y)
+      mouse.move(straightTo(toPixel(msg.x, msg.y))).catch(console.error)
       break
+
     case 'mousedown':
-      injectMouseDown(msg.x, msg.y, msg.button)
+      mouse
+        .move(straightTo(toPixel(msg.x, msg.y)))
+        .then(() => mouse.pressButton(msg.button === 2 ? Button.RIGHT : Button.LEFT))
+        .catch(console.error)
       break
+
     case 'mouseup':
-      injectMouseUp(msg.x, msg.y, msg.button)
+      mouse
+        .move(straightTo(toPixel(msg.x, msg.y)))
+        .then(() => mouse.releaseButton(msg.button === 2 ? Button.RIGHT : Button.LEFT))
+        .catch(console.error)
       break
-    case 'scroll':
-      injectScroll(msg.deltaX, msg.deltaY)
+
+    case 'scroll': {
+      const ticks = Math.max(1, Math.round(Math.abs(msg.deltaY) / 120))
+      if (msg.deltaY > 0) mouse.scrollDown(ticks).catch(console.error)
+      else mouse.scrollUp(ticks).catch(console.error)
       break
+    }
   }
 }

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, desktopCapturer, session, screen } from 'electron'
+import { app, BrowserWindow, ipcMain, desktopCapturer, session, screen, dialog, shell, systemPreferences } from 'electron'
 import { join } from 'path'
 import QRCode from 'qrcode'
 import * as ipLib from 'ip'
@@ -54,8 +54,57 @@ async function createWindow(): Promise<void> {
   })
 }
 
+async function checkMacPermissions(): Promise<void> {
+  if (process.platform !== 'darwin') return
+
+  // Screen Recording permission — must be granted for desktopCapturer to return sources.
+  // There is no programmatic API to request it; we detect and guide the user.
+  const status = systemPreferences.getMediaAccessStatus('screen')
+  if (status !== 'granted') {
+    const { response } = await dialog.showMessageBox({
+      type: 'warning',
+      title: 'Screen Recording Permission Required',
+      message: 'CarDisplay needs Screen Recording access to stream your screen.',
+      detail:
+        'Go to System Settings → Privacy & Security → Screen Recording, ' +
+        'enable CarDisplay, then restart the app.',
+      buttons: ['Open System Settings', 'Later'],
+      defaultId: 0,
+      cancelId: 1
+    })
+    if (response === 0) {
+      await shell.openExternal(
+        'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
+      )
+    }
+  }
+
+  // Accessibility permission — needed for touch-to-mouse injection.
+  const axGranted = systemPreferences.isTrustedAccessibilityClient(false)
+  if (!axGranted) {
+    const { response } = await dialog.showMessageBox({
+      type: 'info',
+      title: 'Accessibility Permission (Optional)',
+      message: 'Enable touch-to-mouse control?',
+      detail:
+        'To forward touch events from the browser to your Mac\'s cursor, ' +
+        'go to System Settings → Privacy & Security → Accessibility and enable CarDisplay.',
+      buttons: ['Open System Settings', 'Skip'],
+      defaultId: 0,
+      cancelId: 1
+    })
+    if (response === 0) {
+      systemPreferences.isTrustedAccessibilityClient(true) // triggers the system prompt
+      await shell.openExternal(
+        'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'
+      )
+    }
+  }
+}
+
 app.whenReady().then(async () => {
   await createWindow()
+  await checkMacPermissions()
 
   app.on('activate', async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
