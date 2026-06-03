@@ -1,0 +1,61 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg-base:       #0d0d0d;
+  --bg-card:       #161625;
+  --bg-card-hover: #1c1c30;
+  --border:        rgba(255, 255, 255, 0.07);
+  --accent-from:   #6366f1;
+  --accent-to:     #8b5cf6;
+  --accent:        #6366f1;
+  --green:         #22c55e;
+  --red:           #ef4444;
+  --amber:         #f59e0b;
+  --text-primary:  #f8fafc;
+  --text-secondary:#94a3b8;
+  --text-muted:    #475569;
+  --radius:        12px;
+  --radius-sm:     8px;
+  --shadow:        0 4px 24px rgba(0,0,0,0.4);
+}
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  user-select: none;
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.1);
+  border-radius: 3px;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
