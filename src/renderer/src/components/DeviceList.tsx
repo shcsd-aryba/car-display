@@ -5,6 +5,7 @@ interface Props {
   clients: ClientInfo[]
   sources: SourceInfo[]
   clientSources: Record<string, string>
+  clientErrors: Record<string, string>
   onDisconnect: (clientId: string) => void
   onStream: (clientId: string, sourceId: string) => Promise<void>
 }
@@ -27,23 +28,29 @@ function deviceName(ua: string): string {
   return 'Browser'
 }
 
-function DeviceRow({ client, sources, currentSourceId, onDisconnect, onStream }: {
+function DeviceRow({ client, sources, currentSourceId, streamError, onDisconnect, onStream }: {
   client: ClientInfo
   sources: SourceInfo[]
   currentSourceId: string
+  streamError: string | null
   onDisconnect: () => void
   onStream: (sourceId: string) => Promise<void>
 }) {
   const [pickedSourceId, setPickedSourceId] = useState(currentSourceId || sources[0]?.id || '')
   const [streaming, setStreaming] = useState(false)
+  const [localError, setLocalError] = useState<string | null>(null)
 
   const currentName = sources.find(s => s.id === currentSourceId)?.name ?? '—'
+  const displayError = streamError || localError
 
   async function handleStream() {
     if (!pickedSourceId || streaming) return
+    setLocalError(null)
     setStreaming(true)
     try {
       await onStream(pickedSourceId)
+    } catch (err: unknown) {
+      setLocalError(err instanceof Error ? err.message : 'Stream failed')
     } finally {
       setStreaming(false)
     }
@@ -68,8 +75,11 @@ function DeviceRow({ client, sources, currentSourceId, onDisconnect, onStream }:
         <span style={styles.itemMeta}>
           Connected {elapsed(client.connectedAt)} · {client.clientId.slice(0, 8)}
         </span>
-        {currentSourceId && (
+        {currentSourceId && !displayError && (
           <span style={styles.nowStreaming}>Streaming: {currentName}</span>
+        )}
+        {displayError && (
+          <span style={styles.streamError} title={displayError}>⚠ {displayError}</span>
         )}
       </div>
 
@@ -109,7 +119,7 @@ function DeviceRow({ client, sources, currentSourceId, onDisconnect, onStream }:
   )
 }
 
-export default function DeviceList({ clients, sources, clientSources, onDisconnect, onStream }: Props) {
+export default function DeviceList({ clients, sources, clientSources, clientErrors, onDisconnect, onStream }: Props) {
   return (
     <div style={styles.card}>
       <div style={styles.cardHeader}>
@@ -144,6 +154,7 @@ export default function DeviceList({ clients, sources, clientSources, onDisconne
                 client={c}
                 sources={sources}
                 currentSourceId={clientSources[c.clientId] ?? ''}
+                streamError={clientErrors[c.clientId] ?? null}
                 onDisconnect={() => onDisconnect(c.clientId)}
                 onStream={(sourceId) => onStream(c.clientId, sourceId)}
               />
@@ -231,6 +242,14 @@ const styles: Record<string, React.CSSProperties> = {
   itemName: { fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' },
   itemMeta: { fontSize: 11, color: 'var(--text-muted)' },
   nowStreaming: { fontSize: 11, color: '#a5b4fc', fontStyle: 'italic' },
+  streamError: {
+    fontSize: 11,
+    color: '#fca5a5',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    maxWidth: 160
+  },
   liveTag: {
     display: 'flex',
     alignItems: 'center',

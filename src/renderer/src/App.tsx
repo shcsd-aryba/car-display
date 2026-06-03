@@ -12,8 +12,8 @@ export default function App() {
   const [clients, setClients] = useState<ClientInfo[]>([])
   const [sources, setSources] = useState<SourceInfo[]>([])
   const [selectedSourceId, setSelectedSourceId] = useState<string>('')
-  // Per-device source assignments: clientId → sourceId currently being streamed
   const [clientSources, setClientSources] = useState<Record<string, string>>({})
+  const [clientErrors, setClientErrors] = useState<Record<string, string>>({})
   const [error, setError] = useState<string | null>(null)
 
   const refreshClients = useCallback(async () => {
@@ -34,15 +34,18 @@ export default function App() {
     refreshClients()
   }, [refreshClients])
 
-  // WebRTC signaling
   useEffect(() => {
     const removeOffer = window.electronAPI.onSignalingOffer(({ clientId, sdp }) => {
-      handleOffer(clientId, sdp, selectedSourceId).then(() => {
-        // Record which source this client is now showing
-        if (selectedSourceId) {
-          setClientSources((prev) => ({ ...prev, [clientId]: selectedSourceId }))
-        }
-      }).catch(console.error)
+      setClientErrors((prev) => { const n = { ...prev }; delete n[clientId]; return n })
+      handleOffer(clientId, sdp, selectedSourceId)
+        .then(() => {
+          if (selectedSourceId) {
+            setClientSources((prev) => ({ ...prev, [clientId]: selectedSourceId }))
+          }
+        })
+        .catch((err: Error) => {
+          setClientErrors((prev) => ({ ...prev, [clientId]: err.message ?? 'Stream failed' }))
+        })
     })
     const removeIce = window.electronAPI.onSignalingIce(({ clientId, candidate }) => {
       handleIceFromBrowser(clientId, candidate)
@@ -51,15 +54,11 @@ export default function App() {
     const removeDisconnect = window.electronAPI.onClientDisconnected(({ clientId }) => {
       removePeer(clientId)
       setClientSources((prev) => { const n = { ...prev }; delete n[clientId]; return n })
+      setClientErrors((prev) => { const n = { ...prev }; delete n[clientId]; return n })
       refreshClients()
     })
 
-    return () => {
-      removeOffer()
-      removeIce()
-      removeConnect()
-      removeDisconnect()
-    }
+    return () => { removeOffer(); removeIce(); removeConnect(); removeDisconnect() }
   }, [selectedSourceId, refreshClients])
 
   const handleSourceChange = (id: string) => {
@@ -68,18 +67,35 @@ export default function App() {
   }
 
   const handleStreamToDevice = useCallback(async (clientId: string, sourceId: string) => {
+    // Update the global source so reconnects pick it up
+    setSelectedSourceId(sourceId)
+    setActiveSource(sourceId)
+    setClientErrors((prev) => { const n = { ...prev }; delete n[clientId]; return n })
+
     try {
       await replaceStream(clientId, sourceId)
       setClientSources((prev) => ({ ...prev, [clientId]: sourceId }))
-    } catch (err) {
-      console.error('[app] replaceStream failed:', err)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (msg === 'NO_PEER' || msg === 'NO_SENDER') {
+        // No active WebRTC connection — disconnect the client so it reconnects
+        // and sends a new offer that will use the updated selectedSourceId
+        await window.electronAPI.disconnectClient(clientId)
+        removePeer(clientId)
+        setClientSources((prev) => { const n = { ...prev }; delete n[clientId]; return n })
+        await refreshClients()
+        // Browser will auto-reconnect within a few seconds
+      } else {
+        setClientErrors((prev) => ({ ...prev, [clientId]: msg }))
+      }
     }
-  }, [])
+  }, [refreshClients])
 
   const handleDisconnect = async (clientId: string) => {
     await window.electronAPI.disconnectClient(clientId)
     removePeer(clientId)
     setClientSources((prev) => { const n = { ...prev }; delete n[clientId]; return n })
+    setClientErrors((prev) => { const n = { ...prev }; delete n[clientId]; return n })
     await refreshClients()
   }
 
@@ -107,6 +123,7 @@ export default function App() {
             clients={clients}
             sources={sources}
             clientSources={clientSources}
+            clientErrors={clientErrors}
             onDisconnect={handleDisconnect}
             onStream={handleStreamToDevice}
           />

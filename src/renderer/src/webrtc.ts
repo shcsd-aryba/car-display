@@ -19,20 +19,45 @@ export function getActiveSource(): string {
   return activeSourceId
 }
 
+// Try multiple getUserMedia constraint formats — Electron 28 / Chrome 120 behaviour
+// changed between major versions, so we probe both to be safe.
 async function getScreenStream(sourceId: string): Promise<MediaStream> {
-  return navigator.mediaDevices.getUserMedia({
-    audio: false,
-    video: {
+  const id = sourceId || activeSourceId
+  if (!id) throw new Error('No screen source selected')
+
+  const attempts: MediaStreamConstraints[] = [
+    // Modern format (Chrome 72+, preferred)
+    {
+      audio: false,
       // @ts-expect-error — Electron-specific constraint
-      mandatory: {
-        chromeMediaSource: 'desktop',
-        chromeMediaSourceId: sourceId,
-        maxWidth: 1920,
-        maxHeight: 1080,
-        maxFrameRate: 30
+      video: { chromeMediaSource: 'desktop', chromeMediaSourceId: id }
+    },
+    // Legacy mandatory format (older Electron/Chrome)
+    {
+      audio: false,
+      video: {
+        // @ts-expect-error — Electron-specific constraint
+        mandatory: {
+          chromeMediaSource: 'desktop',
+          chromeMediaSourceId: id,
+          maxWidth: 1920,
+          maxHeight: 1080,
+          maxFrameRate: 30
+        }
       }
     }
-  })
+  ]
+
+  let lastErr: unknown
+  for (const constraint of attempts) {
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraint)
+    } catch (err) {
+      lastErr = err
+      console.warn('[webrtc] getUserMedia attempt failed:', err)
+    }
+  }
+  throw lastErr
 }
 
 export async function handleOffer(
@@ -59,9 +84,7 @@ export async function handleOffer(
   peers.set(clientId, entry)
 
   pc.onicecandidate = (e) => {
-    if (e.candidate) {
-      window.electronAPI.sendIce(clientId, e.candidate.toJSON())
-    }
+    if (e.candidate) window.electronAPI.sendIce(clientId, e.candidate.toJSON())
   }
 
   pc.onconnectionstatechange = () => {
@@ -74,13 +97,11 @@ export async function handleOffer(
   try {
     const stream = await getScreenStream(sourceId || activeSourceId)
     entry.stream = stream
-
     stream.getTracks().forEach((track) => pc.addTrack(track, stream))
 
     await pc.setRemoteDescription(new RTCSessionDescription(sdp))
     entry.remoteDescSet = true
 
-    // Drain queued candidates that arrived before remote description was set
     for (const candidate of entry.pendingCandidates) {
       await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.warn)
     }
@@ -90,26 +111,28 @@ export async function handleOffer(
     await pc.setLocalDescription(answer)
     window.electronAPI.sendAnswer(clientId, answer)
   } catch (err) {
-    console.error('[webrtc] failed to handle offer:', err)
+    console.error('[webrtc] handleOffer failed:', err)
     removePeer(clientId)
+    throw err  // re-throw so App.tsx can show the error
   }
 }
 
-// Replace the video track for an already-connected peer (source change)
+// Replace the live video track for an already-connected peer.
+// Throws if the peer doesn't exist or has no active sender.
 export async function replaceStream(clientId: string, sourceId: string): Promise<void> {
   const entry = peers.get(clientId)
-  if (!entry) return
+  if (!entry) throw new Error('NO_PEER')
 
   const newStream = await getScreenStream(sourceId)
   const newTrack = newStream.getVideoTracks()[0]
-  if (!newTrack) return
+  if (!newTrack) throw new Error('No video track in new stream')
 
   const sender = entry.pc.getSenders().find((s) => s.track?.kind === 'video')
-  if (sender) {
-    await sender.replaceTrack(newTrack)
-    entry.stream?.getTracks().forEach((t) => t.stop())
-    entry.stream = newStream
-  }
+  if (!sender) throw new Error('NO_SENDER')
+
+  await sender.replaceTrack(newTrack)
+  entry.stream?.getTracks().forEach((t) => t.stop())
+  entry.stream = newStream
 }
 
 export function handleIceFromBrowser(
