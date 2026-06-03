@@ -4,6 +4,12 @@ import QRCode from 'qrcode'
 import * as ipLib from 'ip'
 import { startServer, sendToClient, getClients, disconnectClient } from './server'
 
+// WGC (Windows Graphics Capture) fails with E_INVALIDARG on some hardware/drivers.
+// Fall back to the older DXGI/GDI capturer which is universally compatible.
+if (process.platform === 'win32') {
+  app.commandLine.appendSwitch('disable-features', 'WebRtcUseWgcDesktopCapture')
+}
+
 let mainWindow: BrowserWindow | null = null
 const SERVER_PORT = 8080
 

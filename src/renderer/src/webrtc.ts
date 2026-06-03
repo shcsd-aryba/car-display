@@ -2,6 +2,8 @@ export interface PeerEntry {
   clientId: string
   pc: RTCPeerConnection
   stream: MediaStream | null
+  remoteDescSet: boolean
+  pendingCandidates: RTCIceCandidateInit[]
 }
 
 const peers = new Map<string, PeerEntry>()
@@ -48,10 +50,15 @@ export async function handleOffer(
     iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
   })
 
-  const entry: PeerEntry = { clientId, pc, stream: null }
+  const entry: PeerEntry = {
+    clientId,
+    pc,
+    stream: null,
+    remoteDescSet: false,
+    pendingCandidates: []
+  }
   peers.set(clientId, entry)
 
-  // Gather ICE candidates and send them to the browser via IPC
   pc.onicecandidate = (e) => {
     if (e.candidate) {
       window.electronAPI.sendIce(clientId, e.candidate.toJSON())
@@ -72,6 +79,14 @@ export async function handleOffer(
     stream.getTracks().forEach((track) => pc.addTrack(track, stream))
 
     await pc.setRemoteDescription(new RTCSessionDescription(sdp))
+    entry.remoteDescSet = true
+
+    // Drain any ICE candidates that arrived before remote description was set
+    for (const candidate of entry.pendingCandidates) {
+      await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.warn)
+    }
+    entry.pendingCandidates = []
+
     const answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
 
@@ -88,6 +103,13 @@ export function handleIceFromBrowser(
 ): void {
   const entry = peers.get(clientId)
   if (!entry) return
+
+  if (!entry.remoteDescSet) {
+    // Queue until setRemoteDescription completes
+    entry.pendingCandidates.push(candidate)
+    return
+  }
+
   entry.pc.addIceCandidate(new RTCIceCandidate(candidate)).catch((err) => {
     console.warn('[webrtc] addIceCandidate error:', err)
   })
