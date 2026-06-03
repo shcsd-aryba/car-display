@@ -95,12 +95,16 @@ export async function handleOffer(
   }
 
   try {
-    const stream = await getScreenStream(sourceId || activeSourceId)
+    const sid = sourceId || activeSourceId
+    console.log(`[webrtc] capturing screen, sourceId=${sid}`)
+    const stream = await getScreenStream(sid)
+    console.log(`[webrtc] screen captured OK, tracks=${stream.getTracks().length}`)
     entry.stream = stream
     stream.getTracks().forEach((track) => pc.addTrack(track, stream))
 
     await pc.setRemoteDescription(new RTCSessionDescription(sdp))
     entry.remoteDescSet = true
+    console.log(`[webrtc] remote desc set, draining ${entry.pendingCandidates.length} queued ICE`)
 
     for (const candidate of entry.pendingCandidates) {
       await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.warn)
@@ -109,6 +113,7 @@ export async function handleOffer(
 
     const answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
+    console.log(`[webrtc] answer sent to ${clientId.slice(0, 8)}`)
     window.electronAPI.sendAnswer(clientId, answer)
   } catch (err) {
     console.error('[webrtc] handleOffer failed:', err)

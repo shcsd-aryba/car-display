@@ -120,11 +120,15 @@ export function startServer(
 function handleMessage(clientId: string, msg: SignalingMessage): void {
   switch (msg.type) {
     case 'offer':
+      console.log(`[server] offer ← ${clientId.slice(0, 8)}`)
       wc?.send('signaling-offer', { clientId, sdp: msg.sdp })
       break
-    case 'ice-candidate':
+    case 'ice-candidate': {
+      const cand = (msg.candidate as { candidate?: string })?.candidate ?? ''
+      console.log(`[server] ICE ← ${clientId.slice(0, 8)}: ${cand.slice(0, 60) || '(end)'}`)
       wc?.send('signaling-ice-from-browser', { clientId, candidate: msg.candidate })
       break
+    }
     case 'input':
       handleInput(msg as unknown as InputMessage)
       break

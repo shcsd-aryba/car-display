@@ -52,6 +52,14 @@ async function createWindow(): Promise<void> {
 
   session.defaultSession.setPermissionCheckHandler(() => true)
 
+  // Forward renderer console messages to the terminal so WebRTC errors are visible
+  mainWindow.webContents.on('console-message', (_event, level, message) => {
+    if (level >= 2 || message.includes('[webrtc]')) {
+      const tag = level === 3 ? '[renderer:error]' : level === 2 ? '[renderer:warn]' : '[renderer]'
+      console.log(`${tag} ${message}`)
+    }
+  })
+
   // Start the HTTP/WS signaling server
   startServer(SERVER_PORT, mainWindow.webContents)
 
@@ -167,10 +175,13 @@ ipcMain.handle('disconnect-client', (_event, clientId: string) => {
 
 // Relay signaling answer from renderer → WebSocket client
 ipcMain.on('signaling-answer', (_event, { clientId, sdp }: { clientId: string; sdp: RTCSessionDescriptionInit }) => {
+  console.log(`[main] answer → ${clientId.slice(0, 8)}`)
   sendToClient(clientId, { type: 'answer', sdp })
 })
 
 // Relay ICE candidates from renderer → WebSocket client
 ipcMain.on('signaling-ice-from-renderer', (_event, { clientId, candidate }: { clientId: string; candidate: RTCIceCandidateInit }) => {
+  const cand = candidate?.candidate ?? ''
+  console.log(`[main] ICE → ${clientId.slice(0, 8)}: ${cand.slice(0, 60) || '(end)'}`)
   sendToClient(clientId, { type: 'ice-candidate', candidate })
 })
