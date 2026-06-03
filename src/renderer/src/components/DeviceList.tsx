@@ -1,8 +1,12 @@
-import type { ClientInfo } from '../../../preload'
+import { useState } from 'react'
+import type { ClientInfo, SourceInfo } from '../../../preload'
 
 interface Props {
   clients: ClientInfo[]
+  sources: SourceInfo[]
+  clientSources: Record<string, string>
   onDisconnect: (clientId: string) => void
+  onStream: (clientId: string, sourceId: string) => Promise<void>
 }
 
 function elapsed(ms: number): string {
@@ -17,13 +21,95 @@ function deviceName(ua: string): string {
   if (ua.includes('iPad')) return 'iPad'
   if (ua.includes('iPhone')) return 'iPhone'
   if (ua.includes('Android')) return 'Android'
-  if (ua.includes('Chrome')) return 'Chrome Browser'
-  if (ua.includes('Safari')) return 'Safari Browser'
-  if (ua.includes('Firefox')) return 'Firefox Browser'
+  if (ua.includes('Chrome')) return 'Chrome'
+  if (ua.includes('Firefox')) return 'Firefox'
+  if (ua.includes('Safari')) return 'Safari'
   return 'Browser'
 }
 
-export default function DeviceList({ clients, onDisconnect }: Props) {
+function DeviceRow({ client, sources, currentSourceId, onDisconnect, onStream }: {
+  client: ClientInfo
+  sources: SourceInfo[]
+  currentSourceId: string
+  onDisconnect: () => void
+  onStream: (sourceId: string) => Promise<void>
+}) {
+  const [pickedSourceId, setPickedSourceId] = useState(currentSourceId || sources[0]?.id || '')
+  const [streaming, setStreaming] = useState(false)
+
+  const currentName = sources.find(s => s.id === currentSourceId)?.name ?? '—'
+
+  async function handleStream() {
+    if (!pickedSourceId || streaming) return
+    setStreaming(true)
+    try {
+      await onStream(pickedSourceId)
+    } finally {
+      setStreaming(false)
+    }
+  }
+
+  return (
+    <div style={styles.item}>
+      <div style={styles.itemIcon}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+          <rect x="2" y="3" width="20" height="14" rx="2" stroke="currentColor" strokeWidth="2"/>
+          <path d="M8 21h8M12 17v4" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+        </svg>
+      </div>
+
+      <div style={styles.itemInfo}>
+        <div style={styles.itemRow}>
+          <span style={styles.itemName}>{deviceName(client.userAgent)}</span>
+          <span style={styles.liveTag}>
+            <span style={styles.liveDot} /> LIVE
+          </span>
+        </div>
+        <span style={styles.itemMeta}>
+          Connected {elapsed(client.connectedAt)} · {client.clientId.slice(0, 8)}
+        </span>
+        {currentSourceId && (
+          <span style={styles.nowStreaming}>Streaming: {currentName}</span>
+        )}
+      </div>
+
+      {/* Source picker + stream button */}
+      <div style={styles.controls}>
+        <select
+          value={pickedSourceId}
+          onChange={(e) => setPickedSourceId(e.target.value)}
+          style={styles.select}
+          title="Select source to stream to this display"
+        >
+          {sources.map((s) => (
+            <option key={s.id} value={s.id}>{s.name}</option>
+          ))}
+        </select>
+        <button
+          style={{
+            ...styles.streamBtn,
+            ...(streaming ? styles.streamBtnBusy : {})
+          }}
+          onClick={handleStream}
+          disabled={!pickedSourceId || streaming}
+          title="Send selected source to this display"
+        >
+          {streaming ? '…' : '▶ Stream'}
+        </button>
+      </div>
+
+      <button
+        style={styles.disconnectBtn}
+        onClick={onDisconnect}
+        title="Disconnect"
+      >
+        ✕
+      </button>
+    </div>
+  )
+}
+
+export default function DeviceList({ clients, sources, clientSources, onDisconnect, onStream }: Props) {
   return (
     <div style={styles.card}>
       <div style={styles.cardHeader}>
@@ -53,32 +139,14 @@ export default function DeviceList({ clients, onDisconnect }: Props) {
         ) : (
           <div style={styles.list}>
             {clients.map((c) => (
-              <div key={c.clientId} style={styles.item}>
-                <div style={styles.itemIcon}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                    <rect x="2" y="3" width="20" height="14" rx="2" stroke="currentColor" strokeWidth="2"/>
-                    <path d="M8 21h8M12 17v4" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                  </svg>
-                </div>
-                <div style={styles.itemInfo}>
-                  <span style={styles.itemName}>{deviceName(c.userAgent)}</span>
-                  <span style={styles.itemMeta}>
-                    Connected {elapsed(c.connectedAt)} · {c.clientId.slice(0, 8)}
-                  </span>
-                </div>
-                <div style={styles.itemStatus}>
-                  <span style={styles.liveTag}>
-                    <span style={styles.liveDot} /> LIVE
-                  </span>
-                </div>
-                <button
-                  style={styles.disconnectBtn}
-                  onClick={() => onDisconnect(c.clientId)}
-                  title="Disconnect"
-                >
-                  ✕
-                </button>
-              </div>
+              <DeviceRow
+                key={c.clientId}
+                client={c}
+                sources={sources}
+                currentSourceId={clientSources[c.clientId] ?? ''}
+                onDisconnect={() => onDisconnect(c.clientId)}
+                onStream={(sourceId) => onStream(c.clientId, sourceId)}
+              />
             ))}
           </div>
         )}
@@ -135,10 +203,10 @@ const styles: Record<string, React.CSSProperties> = {
   },
   emptyText: { fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)' },
   emptyHint: { fontSize: 12, color: 'var(--text-muted)' },
-  list: { display: 'flex', flexDirection: 'column', gap: 8 },
+  list: { display: 'flex', flexDirection: 'column', gap: 10 },
   item: {
     display: 'flex',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 10,
     padding: '10px 12px',
     background: 'rgba(255,255,255,0.03)',
@@ -155,12 +223,14 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     justifyContent: 'center',
     color: '#a5b4fc',
-    flexShrink: 0
+    flexShrink: 0,
+    marginTop: 2
   },
-  itemInfo: { flex: 1, display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 },
-  itemName: { fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' },
+  itemInfo: { flex: 1, display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 },
+  itemRow: { display: 'flex', alignItems: 'center', gap: 8 },
+  itemName: { fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' },
   itemMeta: { fontSize: 11, color: 'var(--text-muted)' },
-  itemStatus: {},
+  nowStreaming: { fontSize: 11, color: '#a5b4fc', fontStyle: 'italic' },
   liveTag: {
     display: 'flex',
     alignItems: 'center',
@@ -181,6 +251,38 @@ const styles: Record<string, React.CSSProperties> = {
     background: '#22c55e',
     display: 'inline-block'
   },
+  controls: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 5,
+    flexShrink: 0
+  },
+  select: {
+    background: 'rgba(255,255,255,0.06)',
+    border: '1px solid var(--border)',
+    borderRadius: 6,
+    color: 'var(--text-primary)',
+    fontSize: 11,
+    padding: '4px 6px',
+    cursor: 'pointer',
+    maxWidth: 130,
+    outline: 'none'
+  },
+  streamBtn: {
+    background: 'rgba(99,102,241,0.15)',
+    border: '1px solid rgba(99,102,241,0.35)',
+    borderRadius: 6,
+    color: '#a5b4fc',
+    fontSize: 11,
+    fontWeight: 600,
+    padding: '4px 10px',
+    cursor: 'pointer',
+    transition: 'background 0.15s'
+  },
+  streamBtnBusy: {
+    opacity: 0.5,
+    cursor: 'not-allowed'
+  },
   disconnectBtn: {
     width: 24,
     height: 24,
@@ -193,7 +295,6 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     justifyContent: 'center',
     cursor: 'pointer',
-    transition: 'background 0.15s',
     flexShrink: 0
   }
 }

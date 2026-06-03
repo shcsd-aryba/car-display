@@ -9,7 +9,6 @@ export interface PeerEntry {
 const peers = new Map<string, PeerEntry>()
 const MAX_PEERS = 3
 
-// Active source ID chosen by the user in the UI
 let activeSourceId = ''
 
 export function setActiveSource(id: string): void {
@@ -81,7 +80,7 @@ export async function handleOffer(
     await pc.setRemoteDescription(new RTCSessionDescription(sdp))
     entry.remoteDescSet = true
 
-    // Drain any ICE candidates that arrived before remote description was set
+    // Drain queued candidates that arrived before remote description was set
     for (const candidate of entry.pendingCandidates) {
       await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.warn)
     }
@@ -89,7 +88,6 @@ export async function handleOffer(
 
     const answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
-
     window.electronAPI.sendAnswer(clientId, answer)
   } catch (err) {
     console.error('[webrtc] failed to handle offer:', err)
@@ -97,15 +95,34 @@ export async function handleOffer(
   }
 }
 
+// Replace the video track for an already-connected peer (source change)
+export async function replaceStream(clientId: string, sourceId: string): Promise<void> {
+  const entry = peers.get(clientId)
+  if (!entry) return
+
+  const newStream = await getScreenStream(sourceId)
+  const newTrack = newStream.getVideoTracks()[0]
+  if (!newTrack) return
+
+  const sender = entry.pc.getSenders().find((s) => s.track?.kind === 'video')
+  if (sender) {
+    await sender.replaceTrack(newTrack)
+    entry.stream?.getTracks().forEach((t) => t.stop())
+    entry.stream = newStream
+  }
+}
+
 export function handleIceFromBrowser(
   clientId: string,
   candidate: RTCIceCandidateInit
 ): void {
+  // Empty string = end-of-candidates signal; .local = mDNS hostname unresolvable on Windows
+  if (!candidate.candidate || candidate.candidate.includes('.local')) return
+
   const entry = peers.get(clientId)
   if (!entry) return
 
   if (!entry.remoteDescSet) {
-    // Queue until setRemoteDescription completes
     entry.pendingCandidates.push(candidate)
     return
   }

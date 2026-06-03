@@ -7,7 +7,13 @@ import { startServer, sendToClient, getClients, disconnectClient } from './serve
 // WGC (Windows Graphics Capture) fails with E_INVALIDARG on some hardware/drivers.
 // Fall back to the older DXGI/GDI capturer which is universally compatible.
 if (process.platform === 'win32') {
-  app.commandLine.appendSwitch('disable-features', 'WebRtcUseWgcDesktopCapture')
+  app.commandLine.appendSwitch(
+    'disable-features',
+    // WGC fails with E_INVALIDARG on some hardware — fall back to DXGI/GDI
+    'WebRtcUseWgcDesktopCapture,' +
+    // Send real LAN IPs instead of mDNS .local names so iOS/Android can reach us
+    'WebRtcHideLocalIpsWithMdns'
+  )
 }
 
 let mainWindow: BrowserWindow | null = null

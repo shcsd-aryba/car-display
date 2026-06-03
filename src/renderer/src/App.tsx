@@ -4,7 +4,7 @@ import ConnectionCard from './components/ConnectionCard'
 import DisplaySelector from './components/DisplaySelector'
 import DeviceList from './components/DeviceList'
 import HowToConnect from './components/HowToConnect'
-import { handleOffer, handleIceFromBrowser, removePeer, setActiveSource } from './webrtc'
+import { handleOffer, handleIceFromBrowser, removePeer, replaceStream, setActiveSource } from './webrtc'
 import type { ServerInfo, ClientInfo, SourceInfo } from '../../preload'
 
 export default function App() {
@@ -12,6 +12,8 @@ export default function App() {
   const [clients, setClients] = useState<ClientInfo[]>([])
   const [sources, setSources] = useState<SourceInfo[]>([])
   const [selectedSourceId, setSelectedSourceId] = useState<string>('')
+  // Per-device source assignments: clientId → sourceId currently being streamed
+  const [clientSources, setClientSources] = useState<Record<string, string>>({})
   const [error, setError] = useState<string | null>(null)
 
   const refreshClients = useCallback(async () => {
@@ -19,7 +21,6 @@ export default function App() {
     setClients(c)
   }, [])
 
-  // Load initial data
   useEffect(() => {
     window.electronAPI.getServerInfo().then(setServerInfo).catch((e: Error) => setError(e.message))
     window.electronAPI.getSources().then((srcs) => {
@@ -36,7 +37,12 @@ export default function App() {
   // WebRTC signaling
   useEffect(() => {
     const removeOffer = window.electronAPI.onSignalingOffer(({ clientId, sdp }) => {
-      handleOffer(clientId, sdp, selectedSourceId).catch(console.error)
+      handleOffer(clientId, sdp, selectedSourceId).then(() => {
+        // Record which source this client is now showing
+        if (selectedSourceId) {
+          setClientSources((prev) => ({ ...prev, [clientId]: selectedSourceId }))
+        }
+      }).catch(console.error)
     })
     const removeIce = window.electronAPI.onSignalingIce(({ clientId, candidate }) => {
       handleIceFromBrowser(clientId, candidate)
@@ -44,6 +50,7 @@ export default function App() {
     const removeConnect = window.electronAPI.onClientConnected(() => refreshClients())
     const removeDisconnect = window.electronAPI.onClientDisconnected(({ clientId }) => {
       removePeer(clientId)
+      setClientSources((prev) => { const n = { ...prev }; delete n[clientId]; return n })
       refreshClients()
     })
 
@@ -60,9 +67,19 @@ export default function App() {
     setActiveSource(id)
   }
 
+  const handleStreamToDevice = useCallback(async (clientId: string, sourceId: string) => {
+    try {
+      await replaceStream(clientId, sourceId)
+      setClientSources((prev) => ({ ...prev, [clientId]: sourceId }))
+    } catch (err) {
+      console.error('[app] replaceStream failed:', err)
+    }
+  }, [])
+
   const handleDisconnect = async (clientId: string) => {
     await window.electronAPI.disconnectClient(clientId)
     removePeer(clientId)
+    setClientSources((prev) => { const n = { ...prev }; delete n[clientId]; return n })
     await refreshClients()
   }
 
@@ -86,7 +103,13 @@ export default function App() {
           />
         </div>
         <div style={styles.right}>
-          <DeviceList clients={clients} onDisconnect={handleDisconnect} />
+          <DeviceList
+            clients={clients}
+            sources={sources}
+            clientSources={clientSources}
+            onDisconnect={handleDisconnect}
+            onStream={handleStreamToDevice}
+          />
           <HowToConnect serverInfo={serverInfo} />
         </div>
       </div>
@@ -117,14 +140,6 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '16px 20px 20px',
     overflow: 'auto'
   },
-  left: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 16
-  },
-  right: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 16
-  }
+  left: { display: 'flex', flexDirection: 'column', gap: 16 },
+  right: { display: 'flex', flexDirection: 'column', gap: 16 }
 }
