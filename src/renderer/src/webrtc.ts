@@ -63,7 +63,8 @@ async function getScreenStream(sourceId: string): Promise<MediaStream> {
 export async function handleOffer(
   clientId: string,
   sdp: RTCSessionDescriptionInit,
-  sourceId: string
+  sourceId: string,
+  onConnectionFailed?: (clientId: string, reason: string) => void
 ): Promise<void> {
   if (peers.size >= MAX_PEERS) {
     console.warn('[webrtc] max peers reached, ignoring offer from', clientId)
@@ -89,7 +90,10 @@ export async function handleOffer(
 
   pc.onconnectionstatechange = () => {
     console.log(`[webrtc] ${clientId} state: ${pc.connectionState}`)
-    if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+    if (pc.connectionState === 'failed') {
+      onConnectionFailed?.(clientId, 'ICE failed — Windows: allow electron.exe UDP in Firewall (run app as admin once)')
+      removePeer(clientId)
+    } else if (pc.connectionState === 'closed') {
       removePeer(clientId)
     }
   }

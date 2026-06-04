@@ -62,7 +62,13 @@ const electronAPI = {
     const handler = (_: Electron.IpcRendererEvent, data: { clientId: string }) => cb(data)
     ipcRenderer.on('client-disconnected', handler)
     return () => ipcRenderer.removeListener('client-disconnected', handler)
-  }
+  },
+
+  createExtendCanvas: (): Promise<void> =>
+    ipcRenderer.invoke('create-extend-canvas'),
+
+  closeExtendCanvas: (): Promise<void> =>
+    ipcRenderer.invoke('close-extend-canvas')
 }
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI)

@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, desktopCapturer, session, screen, dialog, shell, systemPreferences } from 'electron'
 import { join } from 'path'
+import { execFile } from 'child_process'
 import QRCode from 'qrcode'
 import * as ipLib from 'ip'
 import { startServer, sendToClient, getClients, disconnectClient } from './server'
@@ -17,7 +18,26 @@ if (process.platform === 'win32') {
 }
 
 let mainWindow: BrowserWindow | null = null
+let extendWindow: BrowserWindow | null = null
 const SERVER_PORT = 8080
+
+// Attempt to add a Windows Firewall inbound UDP rule for Electron so WebRTC
+// connectivity checks aren't silently dropped. Fails gracefully without admin.
+function tryAddWindowsFirewallRule(): void {
+  if (process.platform !== 'win32') return
+  const exe = process.execPath
+  execFile('netsh', [
+    'advfirewall', 'firewall', 'add', 'rule',
+    'name=CarDisplay WebRTC UDP', 'dir=in', 'action=allow',
+    'protocol=UDP', `program=${exe}`, 'enable=yes'
+  ], (err, _out, stderr) => {
+    if (err) {
+      console.warn('[main] Firewall rule not added (run app as admin once to fix WebRTC):', stderr.trim() || err.message)
+    } else {
+      console.log('[main] Windows Firewall rule added — WebRTC UDP unblocked')
+    }
+  })
+}
 
 function getLocalIp(): string {
   try {
@@ -123,6 +143,7 @@ async function checkMacPermissions(): Promise<void> {
 }
 
 app.whenReady().then(async () => {
+  tryAddWindowsFirewallRule()
   await createWindow()
   await checkMacPermissions()
 
@@ -184,4 +205,28 @@ ipcMain.on('signaling-ice-from-renderer', (_event, { clientId, candidate }: { cl
   const cand = candidate?.candidate ?? ''
   console.log(`[main] ICE → ${clientId.slice(0, 8)}: ${cand.slice(0, 60) || '(end)'}`)
   sendToClient(clientId, { type: 'ice-candidate', candidate })
+})
+
+// ── Extend Display canvas window ──────────────────────────────────────────────
+
+ipcMain.handle('create-extend-canvas', () => {
+  if (extendWindow && !extendWindow.isDestroyed()) {
+    extendWindow.focus()
+    return
+  }
+  extendWindow = new BrowserWindow({
+    width: 1280,
+    height: 800,
+    title: 'Extended Display',
+    backgroundColor: '#0d0d0d',
+    webPreferences: { nodeIntegration: false, contextIsolation: true }
+  })
+  extendWindow.loadFile(join(__dirname, '../../resources/extend/index.html'))
+  extendWindow.setMenuBarVisibility(false)
+  extendWindow.on('closed', () => { extendWindow = null })
+})
+
+ipcMain.handle('close-extend-canvas', () => {
+  if (extendWindow && !extendWindow.isDestroyed()) extendWindow.close()
+  extendWindow = null
 })

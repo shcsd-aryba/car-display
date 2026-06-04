@@ -15,16 +15,22 @@ export default function App() {
   const [clientSources, setClientSources] = useState<Record<string, string>>({})
   const [clientErrors, setClientErrors] = useState<Record<string, string>>({})
   const [error, setError] = useState<string | null>(null)
+  const [hasExtendCanvas, setHasExtendCanvas] = useState(false)
 
   const refreshClients = useCallback(async () => {
     const c = await window.electronAPI.getClients()
     setClients(c)
   }, [])
 
+  const refreshSources = useCallback(async () => {
+    const srcs = await window.electronAPI.getSources()
+    setSources(srcs)
+    return srcs
+  }, [])
+
   useEffect(() => {
     window.electronAPI.getServerInfo().then(setServerInfo).catch((e: Error) => setError(e.message))
-    window.electronAPI.getSources().then((srcs) => {
-      setSources(srcs)
+    refreshSources().then((srcs) => {
       const first = srcs.find((s) => s.name.toLowerCase().includes('screen')) ?? srcs[0]
       if (first) {
         setSelectedSourceId(first.id)
@@ -32,12 +38,14 @@ export default function App() {
       }
     })
     refreshClients()
-  }, [refreshClients])
+  }, [refreshClients, refreshSources])
 
   useEffect(() => {
     const removeOffer = window.electronAPI.onSignalingOffer(({ clientId, sdp }) => {
       setClientErrors((prev) => { const n = { ...prev }; delete n[clientId]; return n })
-      handleOffer(clientId, sdp, selectedSourceId)
+      handleOffer(clientId, sdp, selectedSourceId, (cid, reason) => {
+        setClientErrors((prev) => ({ ...prev, [cid]: reason }))
+      })
         .then(() => {
           if (selectedSourceId) {
             setClientSources((prev) => ({ ...prev, [clientId]: selectedSourceId }))
@@ -67,7 +75,6 @@ export default function App() {
   }
 
   const handleStreamToDevice = useCallback(async (clientId: string, sourceId: string) => {
-    // Update the global source so reconnects pick it up
     setSelectedSourceId(sourceId)
     setActiveSource(sourceId)
     setClientErrors((prev) => { const n = { ...prev }; delete n[clientId]; return n })
@@ -78,13 +85,10 @@ export default function App() {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
       if (msg === 'NO_PEER' || msg === 'NO_SENDER') {
-        // No active WebRTC connection — disconnect the client so it reconnects
-        // and sends a new offer that will use the updated selectedSourceId
         await window.electronAPI.disconnectClient(clientId)
         removePeer(clientId)
         setClientSources((prev) => { const n = { ...prev }; delete n[clientId]; return n })
         await refreshClients()
-        // Browser will auto-reconnect within a few seconds
       } else {
         setClientErrors((prev) => ({ ...prev, [clientId]: msg }))
       }
@@ -98,6 +102,19 @@ export default function App() {
     setClientErrors((prev) => { const n = { ...prev }; delete n[clientId]; return n })
     await refreshClients()
   }
+
+  const handleCreateExtendCanvas = useCallback(async () => {
+    await window.electronAPI.createExtendCanvas()
+    setHasExtendCanvas(true)
+    // Give the new window a moment to appear before refreshing sources
+    setTimeout(() => refreshSources(), 600)
+  }, [refreshSources])
+
+  const handleCloseExtendCanvas = useCallback(async () => {
+    await window.electronAPI.closeExtendCanvas()
+    setHasExtendCanvas(false)
+    setTimeout(() => refreshSources(), 300)
+  }, [refreshSources])
 
   return (
     <div style={styles.root}>
@@ -116,6 +133,9 @@ export default function App() {
             sources={sources}
             selectedId={selectedSourceId}
             onChange={handleSourceChange}
+            hasExtendCanvas={hasExtendCanvas}
+            onCreateExtendCanvas={handleCreateExtendCanvas}
+            onCloseExtendCanvas={handleCloseExtendCanvas}
           />
         </div>
         <div style={styles.right}>
