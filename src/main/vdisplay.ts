@@ -4,13 +4,15 @@
  * which registers a real monitor with the OS (macOS 12.4+).
  * The virtual display stays alive as long as this process runs.
  *
- * CGVirtualDisplayCreate is in the RUNTIME CoreGraphics framework but:
- *  - NOT in the SDK linker stubs (so -framework CoreGraphics alone fails at link time)
- *  - Requires the com.apple.developer.virtual-display entitlement to be visible via dlsym
+ * LIMITATION: CGVirtualDisplayCreate requires the com.apple.developer.virtual-display
+ * entitlement, which Apple only provisions to specific Developer teams upon request.
+ * Ad-hoc signing with that entitlement causes amfid to SIGKILL the binary on Apple
+ * Silicon. The feature therefore only works when the app is shipped with a proper
+ * Apple Developer ID cert that has been granted the entitlement by Apple.
  *
- * We compile with clang, then ad-hoc codesign with that entitlement so the OS
- * exposes the symbol. CFBundleGetFunctionPointerForName handles the dyld shared
- * cache correctly where plain dlopen/dlsym may not.
+ * In development (npm run dev), the binary runs without entitlements but
+ * CGVirtualDisplayCreate is hidden behind the entitlement and returns NULL from
+ * dlsym. The app falls back gracefully — existing screen/window sources still work.
  */
 
 import { app } from 'electron'
@@ -21,20 +23,6 @@ import { promisify } from 'util'
 
 const execFileAsync = promisify(execFile)
 
-// Only public / debug entitlements — private ones (com.apple.private.*)
-// require a real Apple Developer cert and cause amfid to SIGKILL the binary
-// immediately on Apple Silicon even with ad-hoc signing.
-const ENTITLEMENTS_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>com.apple.developer.virtual-display</key>
-    <true/>
-    <key>com.apple.security.get-task-allow</key>
-    <true/>
-</dict>
-</plist>
-`
 
 // Objective-C source.
 // Uses CFBundleGetFunctionPointerForName (handles dyld shared cache) then
@@ -101,8 +89,10 @@ int main(void) {
 
         VDCreateFn vdCreate = findVDCreate();
         if (!vdCreate) {
-            fprintf(stderr, "[vdisplay] CGVirtualDisplayCreate not found\\n");
-            fprintf(stderr, "[vdisplay] Requires macOS 12.4+ and virtual-display entitlement\\n");
+            fprintf(stderr, "[vdisplay] CGVirtualDisplayCreate not available\\n");
+            fprintf(stderr, "[vdisplay] This API requires com.apple.developer.virtual-display\\n");
+            fprintf(stderr, "[vdisplay] which Apple only provisions to approved Developer teams.\\n");
+            fprintf(stderr, "[vdisplay] In development mode the virtual display feature is disabled.\\n");
             return 1;
         }
 
@@ -157,43 +147,36 @@ function sourcePath(): string {
   return join(app.getPath('userData'), 'SideDisplay-vdisplay.m')
 }
 
-function entitlementsPath(): string {
-  return join(app.getPath('userData'), 'SideDisplay-vdisplay.entitlements')
-}
-
 async function ensureCompiled(): Promise<boolean> {
   const bin = binaryPath()
   const src = sourcePath()
-  const ent = entitlementsPath()
 
   writeFileSync(src, OBJC_SOURCE.trim(), 'utf8')
-  writeFileSync(ent, ENTITLEMENTS_PLIST.trim(), 'utf8')
 
-  if (!existsSync(bin)) {
-    console.log('[vdisplay] Compiling ObjC helper (one-time)…')
-    try {
-      await execFileAsync('clang', [
-        src, '-o', bin,
-        '-framework', 'CoreGraphics',
-        '-framework', 'CoreFoundation',
-        '-framework', 'Foundation',
-        '-fobjc-arc'
-      ], { timeout: 60_000 })
-      chmodSync(bin, '755')
-      console.log('[vdisplay] Compiled OK')
-    } catch (e) {
-      console.warn('[vdisplay] clang failed:', (e as Error).message)
-      return false
-    }
+  if (existsSync(bin)) return true
+
+  console.log('[vdisplay] Compiling ObjC helper (one-time)…')
+  try {
+    await execFileAsync('clang', [
+      src, '-o', bin,
+      '-framework', 'CoreGraphics',
+      '-framework', 'CoreFoundation',
+      '-framework', 'Foundation',
+      '-fobjc-arc'
+    ], { timeout: 60_000 })
+    chmodSync(bin, '755')
+    console.log('[vdisplay] Compiled OK')
+  } catch (e) {
+    console.warn('[vdisplay] clang failed:', (e as Error).message)
+    return false
   }
 
-  // Always re-sign so entitlement changes take effect without deleting the binary.
-  // Ad-hoc signing (-) works in development; a packaged app uses a Developer ID cert.
+  // Plain ad-hoc sign — no entitlements plist.
+  // com.apple.developer.virtual-display requires Apple provisioning; adding it
+  // to an ad-hoc signature causes amfid to SIGKILL the binary on Apple Silicon.
   try {
-    await execFileAsync('codesign', [
-      '--force', '--sign', '-', '--entitlements', ent, bin
-    ], { timeout: 15_000 })
-    console.log('[vdisplay] Codesigned with virtual-display entitlement')
+    await execFileAsync('codesign', ['--force', '--sign', '-', bin], { timeout: 15_000 })
+    console.log('[vdisplay] Codesigned (ad-hoc)')
   } catch (e) {
     console.warn('[vdisplay] codesign failed (continuing anyway):', (e as Error).message)
   }
