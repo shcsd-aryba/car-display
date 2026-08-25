@@ -21,15 +21,14 @@ import { promisify } from 'util'
 
 const execFileAsync = promisify(execFile)
 
+// Only public / debug entitlements — private ones (com.apple.private.*)
+// require a real Apple Developer cert and cause amfid to SIGKILL the binary
+// immediately on Apple Silicon even with ad-hoc signing.
 const ENTITLEMENTS_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>com.apple.developer.virtual-display</key>
-    <true/>
-    <key>com.apple.private.CoreDisplay.VirtualDisplay</key>
-    <true/>
-    <key>com.apple.CoreDisplay.remote-framebuffer-server</key>
     <true/>
     <key>com.apple.security.get-task-allow</key>
     <true/>
@@ -170,26 +169,26 @@ async function ensureCompiled(): Promise<boolean> {
   writeFileSync(src, OBJC_SOURCE.trim(), 'utf8')
   writeFileSync(ent, ENTITLEMENTS_PLIST.trim(), 'utf8')
 
-  if (existsSync(bin)) return true
-
-  console.log('[vdisplay] Compiling ObjC helper (one-time)…')
-  try {
-    await execFileAsync('clang', [
-      src, '-o', bin,
-      '-framework', 'CoreGraphics',
-      '-framework', 'CoreFoundation',
-      '-framework', 'Foundation',
-      '-fobjc-arc'
-    ], { timeout: 60_000 })
-    chmodSync(bin, '755')
-    console.log('[vdisplay] Compiled OK')
-  } catch (e) {
-    console.warn('[vdisplay] clang failed:', (e as Error).message)
-    return false
+  if (!existsSync(bin)) {
+    console.log('[vdisplay] Compiling ObjC helper (one-time)…')
+    try {
+      await execFileAsync('clang', [
+        src, '-o', bin,
+        '-framework', 'CoreGraphics',
+        '-framework', 'CoreFoundation',
+        '-framework', 'Foundation',
+        '-fobjc-arc'
+      ], { timeout: 60_000 })
+      chmodSync(bin, '755')
+      console.log('[vdisplay] Compiled OK')
+    } catch (e) {
+      console.warn('[vdisplay] clang failed:', (e as Error).message)
+      return false
+    }
   }
 
-  // Ad-hoc codesign with virtual-display entitlement so the OS exposes the API.
-  // This works in development; a properly signed app would use a Developer ID cert.
+  // Always re-sign so entitlement changes take effect without deleting the binary.
+  // Ad-hoc signing (-) works in development; a packaged app uses a Developer ID cert.
   try {
     await execFileAsync('codesign', [
       '--force', '--sign', '-', '--entitlements', ent, bin
@@ -230,8 +229,12 @@ export async function startVirtualDisplay(): Promise<string | null> {
       if (!resolved) { resolved = true; resolve(null) }
     })
 
-    vdProc.on('exit', (code) => {
-      console.log(`[vdisplay] process exited (code ${code})`)
+    vdProc.on('exit', (code, signal) => {
+      const detail = signal ? `signal ${signal}` : `code ${code}`
+      console.log(`[vdisplay] process exited (${detail})`)
+      if (signal === 'SIGKILL') {
+        console.warn('[vdisplay] SIGKILL = amfid rejected entitlements, or binary needs re-sign')
+      }
       if (!resolved) { resolved = true; resolve(null) }
       vdProc = null
     })
