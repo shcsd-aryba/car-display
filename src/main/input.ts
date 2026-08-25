@@ -13,13 +13,50 @@ try {
   console.warn('[input] @nut-tree/nut-js unavailable — touch control disabled')
 }
 
+// Bounds of the currently streamed source in absolute screen coordinates.
+// Touches are mapped into this rect. Null = fall back to primary display.
+let sourceBounds: { x: number; y: number; width: number; height: number } | null = null
+
+export function setSourceBounds(b: typeof sourceBounds): void {
+  sourceBounds = b
+  if (b) console.log(`[input] source bounds: (${b.x},${b.y}) ${b.width}×${b.height}`)
+}
+
+// Find a window's screen bounds by matching its title to `name`.
+// Uses nut-js v4 getWindows() / getBoundingBox(). Returns null if unavailable.
+export async function findWindowBounds(
+  name: string
+): Promise<{ x: number; y: number; width: number; height: number } | null> {
+  if (!nutLib?.getWindows) return null
+  try {
+    const wins: { getTitle(): Promise<string>; getBoundingBox(): Promise<{ left: number; top: number; width: number; height: number }> }[] =
+      await nutLib.getWindows()
+    const nameLc = name.toLowerCase()
+    for (const win of wins) {
+      const title = await win.getTitle().catch(() => '')
+      if (!title) continue
+      const titleLc = title.toLowerCase()
+      if (titleLc.includes(nameLc) || nameLc.includes(titleLc)) {
+        const box = await win.getBoundingBox()
+        return { x: box.left, y: box.top, width: box.width, height: box.height }
+      }
+    }
+  } catch (e) {
+    console.warn('[input] findWindowBounds failed:', e)
+  }
+  return null
+}
+
 export function isInputAvailable(): boolean {
   return nutLib !== null
 }
 
 function toPixel(normX: number, normY: number): unknown {
-  const { width, height } = screen.getPrimaryDisplay().bounds
-  return new nutLib.Point(Math.round(normX * width), Math.round(normY * height))
+  const b = sourceBounds ?? screen.getPrimaryDisplay().bounds
+  return new nutLib.Point(
+    Math.round(b.x + normX * b.width),
+    Math.round(b.y + normY * b.height)
+  )
 }
 
 export type InputMessage =

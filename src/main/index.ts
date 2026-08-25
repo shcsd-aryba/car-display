@@ -4,6 +4,7 @@ import { execFile } from 'child_process'
 import QRCode from 'qrcode'
 import * as ipLib from 'ip'
 import { startServer, sendToClient, getClients, disconnectClient, broadcastFrame } from './server'
+import { setSourceBounds, findWindowBounds } from './input'
 
 // WGC (Windows Graphics Capture) fails with E_INVALIDARG on some hardware/drivers.
 // Fall back to the older DXGI/GDI capturer which is universally compatible.
@@ -24,6 +25,36 @@ const SERVER_PORT = 8080
 let streamInterval: ReturnType<typeof setInterval> | null = null
 let currentSourceId = ''
 let capturing = false
+let boundsLastUpdated = 0
+const BOUNDS_TTL = 5000 // refresh source bounds every 5 s
+
+// Resolve the absolute screen rect for `sourceId` so touch input maps correctly.
+// Screen sources use Electron's display list; window sources use nut-js getWindows().
+async function updateInputBounds(sourceId: string, sourceName: string): Promise<void> {
+  try {
+    if (sourceId.startsWith('screen:')) {
+      // Fetch display_id for this screen source
+      const srcs = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 1, height: 1 } })
+      const found = srcs.find((s) => s.id === sourceId)
+      const displayId = (found as unknown as { display_id?: string })?.display_id
+      if (displayId) {
+        const disp = screen.getAllDisplays().find((d) => String(d.id) === displayId)
+        if (disp) { setSourceBounds(disp.bounds); return }
+      }
+      // Fallback: primary display
+      setSourceBounds(screen.getPrimaryDisplay().bounds)
+    } else {
+      // Window source — find via nut-js by matching title to source name
+      const bounds = await findWindowBounds(sourceName)
+      if (bounds) { setSourceBounds(bounds); return }
+      // Fallback: display nearest current cursor
+      const pt = screen.getCursorScreenPoint()
+      setSourceBounds(screen.getDisplayNearestPoint(pt).bounds)
+    }
+  } catch (e) {
+    console.warn('[main] updateInputBounds failed:', e)
+  }
+}
 
 // Attempt to add a Windows Firewall inbound UDP rule for Electron so WebRTC
 // connectivity checks aren't silently dropped. Fails gracefully without admin.
@@ -215,6 +246,7 @@ ipcMain.on('signaling-ice-from-renderer', (_event, { clientId, candidate }: { cl
 
 ipcMain.handle('set-stream-source', (_event, sourceId: string) => {
   currentSourceId = sourceId
+  boundsLastUpdated = 0 // force immediate bounds refresh on next tick
   if (streamInterval) return
   streamInterval = setInterval(async () => {
     if (capturing || !currentSourceId || getClients().length === 0) return
@@ -225,45 +257,40 @@ ipcMain.handle('set-stream-source', (_event, sourceId: string) => {
         thumbnailSize: { width: 1280, height: 720 }
       })
       const src = sources.find((s) => s.id === currentSourceId)
-      if (src && !src.thumbnail.isEmpty()) {
-        broadcastFrame(src.thumbnail.toJPEG(70))
+      if (src) {
+        // Refresh input coordinate bounds every BOUNDS_TTL ms
+        const now = Date.now()
+        if (now - boundsLastUpdated > BOUNDS_TTL) {
+          boundsLastUpdated = now
+          updateInputBounds(currentSourceId, src.name).catch(console.warn)
+        }
+        if (!src.thumbnail.isEmpty()) {
+          broadcastFrame(src.thumbnail.toJPEG(70))
+        }
       }
     } catch { /* ignore */ } finally {
       capturing = false
     }
-  }, 150)
+  }, 100) // ~10 fps
 })
 
 ipcMain.handle('create-extend-canvas', () => {
   if (extendWindow && !extendWindow.isDestroyed()) {
     extendWindow.focus()
-    return { onSecondary: false }
+    return
   }
-
-  // Place the window on a secondary display if one is connected,
-  // otherwise fall back to a floating window on the primary display.
-  const allDisplays = screen.getAllDisplays()
-  const primary = screen.getPrimaryDisplay()
-  const secondary = allDisplays.find((d) => d.id !== primary.id)
-  const target = secondary ?? primary
-  const { x, y, width, height } = target.bounds
-
+  // Open a plain floating window — the user positions it wherever they like
+  // (on their primary, secondary, or Android-streamed area).
   extendWindow = new BrowserWindow({
-    x, y, width, height,
+    width: 1280,
+    height: 800,
     title: 'Extended Display',
     backgroundColor: '#0d0d0d',
     webPreferences: { nodeIntegration: false, contextIsolation: true }
   })
   extendWindow.loadFile(join(__dirname, '../../resources/extend/index.html'))
   extendWindow.setMenuBarVisibility(false)
-  if (secondary) {
-    extendWindow.setFullScreen(true)
-  } else {
-    extendWindow.maximize()
-  }
   extendWindow.on('closed', () => { extendWindow = null })
-
-  return { onSecondary: !!secondary }
 })
 
 ipcMain.handle('close-extend-canvas', () => {
