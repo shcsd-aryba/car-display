@@ -4,9 +4,13 @@
  * which registers a real monitor with the OS (macOS 12.4+).
  * The virtual display stays alive as long as this process runs.
  *
- * Note: CGVirtualDisplay.h is in CoreGraphics.framework but is NOT in the Swift
- * module map, so Swift's `import CoreGraphics` can't see it. We use Objective-C
- * with forward-declared @interfaces instead — the symbols are present at link time.
+ * CGVirtualDisplayCreate is in the RUNTIME CoreGraphics framework but:
+ *  - NOT in the SDK linker stubs (so -framework CoreGraphics alone fails at link time)
+ *  - Requires the com.apple.developer.virtual-display entitlement to be visible via dlsym
+ *
+ * We compile with clang, then ad-hoc codesign with that entitlement so the OS
+ * exposes the symbol. CFBundleGetFunctionPointerForName handles the dyld shared
+ * cache correctly where plain dlopen/dlsym may not.
  */
 
 import { app } from 'electron'
@@ -17,44 +21,95 @@ import { promisify } from 'util'
 
 const execFileAsync = promisify(execFile)
 
+const ENTITLEMENTS_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.developer.virtual-display</key>
+    <true/>
+    <key>com.apple.private.CoreDisplay.VirtualDisplay</key>
+    <true/>
+    <key>com.apple.CoreDisplay.remote-framebuffer-server</key>
+    <true/>
+    <key>com.apple.security.get-task-allow</key>
+    <true/>
+</dict>
+</plist>
+`
+
 // Objective-C source.
-// CGVirtualDisplayCreate exists in the RUNTIME CoreGraphics.framework on macOS 12.4+
-// but is NOT in the SDK linker stubs, so -framework CoreGraphics alone fails.
-// We use dlsym() to look it up at runtime and objc_msgSend for property setters,
-// which avoids any compile-time or link-time dependency on the private header.
+// Uses CFBundleGetFunctionPointerForName (handles dyld shared cache) then
+// falls back to dlsym. Property setters use objc_msgSend to avoid needing
+// the private CGVirtualDisplay header at compile or link time.
 const OBJC_SOURCE = `
 #import <Foundation/Foundation.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import <CoreFoundation/CoreFoundation.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <dlfcn.h>
 
 typedef CGError (*VDCreateFn)(id descriptor, id *outDisplay, CGDisplayStreamRef *outStream);
 
+static void printMacOSVersion(void) {
+    NSOperatingSystemVersion v = [[NSProcessInfo processInfo] operatingSystemVersion];
+    fprintf(stderr, "[vdisplay] macOS %ld.%ld.%ld\\n",
+            (long)v.majorVersion, (long)v.minorVersion, (long)v.patchVersion);
+}
+
 static VDCreateFn findVDCreate(void) {
-    // Search already-loaded images first, then load CoreGraphics explicitly.
-    VDCreateFn fn = (VDCreateFn)dlsym(RTLD_DEFAULT, "CGVirtualDisplayCreate");
-    if (fn) return fn;
+    VDCreateFn fn = NULL;
+
+    // Best method: CFBundle handles the dyld shared cache on macOS 12+
+    CFBundleRef cgBundle = CFBundleGetBundleWithIdentifier(CFSTR("com.apple.CoreGraphics"));
+    if (cgBundle) {
+        fn = (VDCreateFn)CFBundleGetFunctionPointerForName(cgBundle, CFSTR("CGVirtualDisplayCreate"));
+        if (fn) { fprintf(stderr, "[vdisplay] found via CFBundle(CoreGraphics)\\n"); return fn; }
+    }
+
+    // Fallback 1: already-loaded images (works if the entitlement unlocked visibility)
+    fn = (VDCreateFn)dlsym(RTLD_DEFAULT, "CGVirtualDisplayCreate");
+    if (fn) { fprintf(stderr, "[vdisplay] found via RTLD_DEFAULT\\n"); return fn; }
+
+    // Fallback 2: explicit dlopen of CoreGraphics
     void *cg = dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_LAZY | RTLD_NOLOAD);
     if (!cg) cg = dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_LAZY);
-    if (cg) { fn = (VDCreateFn)dlsym(cg, "CGVirtualDisplayCreate"); if (fn) return fn; }
-    // Fallback: CoreDisplay private framework (used by some apps on older macOS)
+    if (cg) {
+        fn = (VDCreateFn)dlsym(cg, "CGVirtualDisplayCreate");
+        if (fn) { fprintf(stderr, "[vdisplay] found via dlopen(CoreGraphics)\\n"); return fn; }
+    }
+
+    // Fallback 3: CoreDisplay private framework bundle
+    CFBundleRef cdBundle = CFBundleGetBundleWithIdentifier(CFSTR("com.apple.CoreDisplay"));
+    if (cdBundle) {
+        fn = (VDCreateFn)CFBundleGetFunctionPointerForName(cdBundle, CFSTR("CGVirtualDisplayCreate"));
+        if (fn) { fprintf(stderr, "[vdisplay] found via CFBundle(CoreDisplay)\\n"); return fn; }
+    }
+
+    // Fallback 4: explicit dlopen of CoreDisplay
     void *cd = dlopen("/System/Library/PrivateFrameworks/CoreDisplay.framework/CoreDisplay", RTLD_LAZY);
-    if (cd) { fn = (VDCreateFn)dlsym(cd, "CGVirtualDisplayCreate"); }
-    return fn;
+    if (cd) {
+        fn = (VDCreateFn)dlsym(cd, "CGVirtualDisplayCreate");
+        if (fn) { fprintf(stderr, "[vdisplay] found via dlopen(CoreDisplay)\\n"); return fn; }
+    }
+
+    return NULL;
 }
 
 int main(void) {
     @autoreleasepool {
+        printMacOSVersion();
+
         VDCreateFn vdCreate = findVDCreate();
         if (!vdCreate) {
-            fprintf(stderr, "[vdisplay] CGVirtualDisplayCreate not found — requires macOS 12.4+\\n");
+            fprintf(stderr, "[vdisplay] CGVirtualDisplayCreate not found\\n");
+            fprintf(stderr, "[vdisplay] Requires macOS 12.4+ and virtual-display entitlement\\n");
             return 1;
         }
 
         Class descClass = NSClassFromString(@"CGVirtualDisplayDescriptor");
         if (!descClass) {
-            fprintf(stderr, "[vdisplay] CGVirtualDisplayDescriptor not available\\n");
+            fprintf(stderr, "[vdisplay] CGVirtualDisplayDescriptor class not available\\n");
             return 1;
         }
 
@@ -103,11 +158,17 @@ function sourcePath(): string {
   return join(app.getPath('userData'), 'SideDisplay-vdisplay.m')
 }
 
+function entitlementsPath(): string {
+  return join(app.getPath('userData'), 'SideDisplay-vdisplay.entitlements')
+}
+
 async function ensureCompiled(): Promise<boolean> {
   const bin = binaryPath()
   const src = sourcePath()
+  const ent = entitlementsPath()
 
   writeFileSync(src, OBJC_SOURCE.trim(), 'utf8')
+  writeFileSync(ent, ENTITLEMENTS_PLIST.trim(), 'utf8')
 
   if (existsSync(bin)) return true
 
@@ -116,16 +177,29 @@ async function ensureCompiled(): Promise<boolean> {
     await execFileAsync('clang', [
       src, '-o', bin,
       '-framework', 'CoreGraphics',
+      '-framework', 'CoreFoundation',
       '-framework', 'Foundation',
       '-fobjc-arc'
     ], { timeout: 60_000 })
     chmodSync(bin, '755')
     console.log('[vdisplay] Compiled OK')
-    return true
   } catch (e) {
     console.warn('[vdisplay] clang failed:', (e as Error).message)
     return false
   }
+
+  // Ad-hoc codesign with virtual-display entitlement so the OS exposes the API.
+  // This works in development; a properly signed app would use a Developer ID cert.
+  try {
+    await execFileAsync('codesign', [
+      '--force', '--sign', '-', '--entitlements', ent, bin
+    ], { timeout: 15_000 })
+    console.log('[vdisplay] Codesigned with virtual-display entitlement')
+  } catch (e) {
+    console.warn('[vdisplay] codesign failed (continuing anyway):', (e as Error).message)
+  }
+
+  return true
 }
 
 export async function startVirtualDisplay(): Promise<string | null> {
