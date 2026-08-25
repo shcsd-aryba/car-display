@@ -59,7 +59,12 @@ export default function App() {
     const removeIce = window.electronAPI.onSignalingIce(({ clientId, candidate }) => {
       handleIceFromBrowser(clientId, candidate)
     })
-    const removeConnect = window.electronAPI.onClientConnected(() => refreshClients())
+    const removeConnect = window.electronAPI.onClientConnected(({ clientId }) => {
+      refreshClients()
+      if (selectedSourceId) {
+        setClientSources((prev) => ({ ...prev, [clientId]: selectedSourceId }))
+      }
+    })
     const removeDisconnect = window.electronAPI.onClientDisconnected(({ clientId }) => {
       removePeer(clientId)
       setClientSources((prev) => { const n = { ...prev }; delete n[clientId]; return n })
@@ -74,6 +79,8 @@ export default function App() {
     setSelectedSourceId(id)
     setActiveSource(id)
     window.electronAPI.setStreamSource(id)
+    // Reflect new source on all connected device rows
+    setClientSources(Object.fromEntries(clients.map((c) => [c.clientId, id])))
   }
 
   const handleStreamToDevice = useCallback(async (_clientId: string, sourceId: string) => {

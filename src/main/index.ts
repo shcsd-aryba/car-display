@@ -237,18 +237,33 @@ ipcMain.handle('set-stream-source', (_event, sourceId: string) => {
 ipcMain.handle('create-extend-canvas', () => {
   if (extendWindow && !extendWindow.isDestroyed()) {
     extendWindow.focus()
-    return
+    return { onSecondary: false }
   }
+
+  // Place the window on a secondary display if one is connected,
+  // otherwise fall back to a floating window on the primary display.
+  const allDisplays = screen.getAllDisplays()
+  const primary = screen.getPrimaryDisplay()
+  const secondary = allDisplays.find((d) => d.id !== primary.id)
+  const target = secondary ?? primary
+  const { x, y, width, height } = target.bounds
+
   extendWindow = new BrowserWindow({
-    width: 1280,
-    height: 800,
+    x, y, width, height,
     title: 'Extended Display',
     backgroundColor: '#0d0d0d',
     webPreferences: { nodeIntegration: false, contextIsolation: true }
   })
   extendWindow.loadFile(join(__dirname, '../../resources/extend/index.html'))
   extendWindow.setMenuBarVisibility(false)
+  if (secondary) {
+    extendWindow.setFullScreen(true)
+  } else {
+    extendWindow.maximize()
+  }
   extendWindow.on('closed', () => { extendWindow = null })
+
+  return { onSecondary: !!secondary }
 })
 
 ipcMain.handle('close-extend-canvas', () => {
