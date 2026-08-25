@@ -4,7 +4,7 @@ import ConnectionCard from './components/ConnectionCard'
 import DisplaySelector from './components/DisplaySelector'
 import DeviceList from './components/DeviceList'
 import HowToConnect from './components/HowToConnect'
-import { handleOffer, handleIceFromBrowser, removePeer, replaceStream, setActiveSource } from './webrtc'
+import { handleOffer, handleIceFromBrowser, removePeer, setActiveSource } from './webrtc'
 import type { ServerInfo, ClientInfo, SourceInfo } from '../../preload'
 
 export default function App() {
@@ -76,26 +76,17 @@ export default function App() {
     window.electronAPI.setStreamSource(id)
   }
 
-  const handleStreamToDevice = useCallback(async (clientId: string, sourceId: string) => {
+  const handleStreamToDevice = useCallback(async (_clientId: string, sourceId: string) => {
+    // MJPEG is a broadcast — changing source affects all connected devices
     setSelectedSourceId(sourceId)
     setActiveSource(sourceId)
-    setClientErrors((prev) => { const n = { ...prev }; delete n[clientId]; return n })
-
-    try {
-      await replaceStream(clientId, sourceId)
-      setClientSources((prev) => ({ ...prev, [clientId]: sourceId }))
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      if (msg === 'NO_PEER' || msg === 'NO_SENDER') {
-        await window.electronAPI.disconnectClient(clientId)
-        removePeer(clientId)
-        setClientSources((prev) => { const n = { ...prev }; delete n[clientId]; return n })
-        await refreshClients()
-      } else {
-        setClientErrors((prev) => ({ ...prev, [clientId]: msg }))
-      }
-    }
-  }, [refreshClients])
+    window.electronAPI.setStreamSource(sourceId)
+    setClientSources((prev) => {
+      const updated: Record<string, string> = {}
+      Object.keys(prev).forEach((id) => { updated[id] = sourceId })
+      return updated
+    })
+  }, [])
 
   const handleDisconnect = async (clientId: string) => {
     await window.electronAPI.disconnectClient(clientId)
