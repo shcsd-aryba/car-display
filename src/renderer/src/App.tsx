@@ -29,6 +29,14 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    const removeVd = window.electronAPI.onVirtualDisplayReady(() => {
+      // Virtual display registered with macOS — refresh so "CarDisplay" appears in the list
+      refreshSources()
+    })
+    return removeVd
+  }, [refreshSources])
+
+  useEffect(() => {
     window.electronAPI.getServerInfo().then(setServerInfo).catch((e: Error) => setError(e.message))
     refreshSources().then((srcs) => {
       const first = srcs.find((s) => s.name.toLowerCase().includes('screen')) ?? srcs[0]

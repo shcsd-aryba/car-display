@@ -67,6 +67,12 @@ const electronAPI = {
   setStreamSource: (sourceId: string): Promise<void> =>
     ipcRenderer.invoke('set-stream-source', sourceId),
 
+  onVirtualDisplayReady: (cb: () => void): (() => void) => {
+    const handler = () => cb()
+    ipcRenderer.on('virtual-display-ready', handler)
+    return () => ipcRenderer.removeListener('virtual-display-ready', handler)
+  },
+
   createExtendCanvas: (): Promise<void> =>
     ipcRenderer.invoke('create-extend-canvas'),
 

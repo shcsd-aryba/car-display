@@ -5,6 +5,7 @@ import QRCode from 'qrcode'
 import * as ipLib from 'ip'
 import { startServer, sendToClient, getClients, disconnectClient, broadcastFrame } from './server'
 import { setSourceBounds, findWindowBounds } from './input'
+import { startVirtualDisplay, stopVirtualDisplay } from './vdisplay'
 
 // WGC (Windows Graphics Capture) fails with E_INVALIDARG on some hardware/drivers.
 // Fall back to the older DXGI/GDI capturer which is universally compatible.
@@ -182,6 +183,19 @@ app.whenReady().then(async () => {
   await createWindow()
   await checkMacPermissions()
 
+  // Start macOS virtual display (CGVirtualDisplayCreate).
+  // Runs in background — notifies renderer when ready so it can refresh sources.
+  if (process.platform === 'darwin') {
+    startVirtualDisplay().then((displayId) => {
+      if (displayId && mainWindow && !mainWindow.isDestroyed()) {
+        // Give macOS ~2 s to fully register the new display before refreshing
+        setTimeout(() => {
+          mainWindow?.webContents.send('virtual-display-ready')
+        }, 2000)
+      }
+    })
+  }
+
   app.on('activate', async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       await createWindow()
@@ -189,8 +203,13 @@ app.whenReady().then(async () => {
   })
 })
 
+app.on('before-quit', () => {
+  stopVirtualDisplay()
+})
+
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
+    stopVirtualDisplay()
     app.quit()
   }
 })
