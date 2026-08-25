@@ -13,6 +13,11 @@ module.exports = {
   asarUnpack: [
     'node_modules/@nut-tree-fork/**/*'
   ],
+  // Copy the vdisplay native addon next to the app resources so vdisplay.ts
+  // can find it at process.resourcesPath/vdisplay.node in the packaged app.
+  extraResources: [
+    { from: 'build/Release/vdisplay.node', to: 'vdisplay.node', filter: ['**/*'] }
+  ],
   mac: {
     // Both keys required — entitlements for the app binary, entitlementsInherit for helper processes
     entitlements: 'build/entitlements.mac.plist',

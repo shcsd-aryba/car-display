@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      com.apple.developer.virtual-display requires explicit approval from Apple.
+      Apply at: https://developer.apple.com/contact/request/virtual-display/
+      Once your team is provisioned, npm run package:mac with your Developer ID
+      certificate will sign with this entitlement and CGVirtualDisplayCreate works.
+    -->
+    <key>com.apple.developer.virtual-display</key>
+    <true/>
+
+    <!-- Required for Electron's JIT compilation -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <!-- Required for loading the native vdisplay addon from outside the app bundle -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

@@ -24,8 +24,8 @@ function loadAddon(): VDisplayAddon | null {
     // Development (electron-vite dev): out/main/ is the output dir
     join(__dirname, '../../build/Release/vdisplay.node'),
     join(__dirname, '../../../build/Release/vdisplay.node'),
-    // Fallback for packaged app (electron-builder copies native modules)
-    join(app.getAppPath(), '../build/Release/vdisplay.node'),
+    // Packaged app: extraResources places it next to the app resources
+    join(process.resourcesPath, 'vdisplay.node'),
     join(__dirname, 'vdisplay.node')
   ]
   for (const p of candidates) {
