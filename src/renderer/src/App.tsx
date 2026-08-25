@@ -35,6 +35,7 @@ export default function App() {
       if (first) {
         setSelectedSourceId(first.id)
         setActiveSource(first.id)
+        window.electronAPI.setStreamSource(first.id)
       }
     })
     refreshClients()
@@ -72,6 +73,7 @@ export default function App() {
   const handleSourceChange = (id: string) => {
     setSelectedSourceId(id)
     setActiveSource(id)
+    window.electronAPI.setStreamSource(id)
   }
 
   const handleStreamToDevice = useCallback(async (clientId: string, sourceId: string) => {

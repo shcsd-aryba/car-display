@@ -195,7 +195,7 @@ const tileSt: Record<string, React.CSSProperties> = {
     transition: 'border-color 0.15s, background 0.15s'
   },
   tileSelected: {
-    borderColor: 'rgba(99,102,241,0.6)',
+    border: '1px solid rgba(99,102,241,0.6)',
     background: 'rgba(99,102,241,0.1)'
   },
   thumb: {

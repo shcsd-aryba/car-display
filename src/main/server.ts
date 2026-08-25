@@ -144,6 +144,16 @@ export function sendToClient(clientId: string, msg: SignalingMessage): void {
   }
 }
 
+export function broadcastFrame(jpeg: Buffer): void {
+  if (clientSockets.size === 0) return
+  const payload = '{"type":"frame","data":"' + jpeg.toString('base64') + '"}'
+  clientSockets.forEach((ws) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(payload, (err) => { if (err) console.warn('[server] frame send error:', err?.message) })
+    }
+  })
+}
+
 export function getClients(): ClientInfo[] {
   return Array.from(clientInfo.values())
 }

@@ -3,7 +3,7 @@ import { join } from 'path'
 import { execFile } from 'child_process'
 import QRCode from 'qrcode'
 import * as ipLib from 'ip'
-import { startServer, sendToClient, getClients, disconnectClient } from './server'
+import { startServer, sendToClient, getClients, disconnectClient, broadcastFrame } from './server'
 
 // WGC (Windows Graphics Capture) fails with E_INVALIDARG on some hardware/drivers.
 // Fall back to the older DXGI/GDI capturer which is universally compatible.
@@ -20,6 +20,10 @@ if (process.platform === 'win32') {
 let mainWindow: BrowserWindow | null = null
 let extendWindow: BrowserWindow | null = null
 const SERVER_PORT = 8080
+
+let streamInterval: ReturnType<typeof setInterval> | null = null
+let currentSourceId = ''
+let capturing = false
 
 // Attempt to add a Windows Firewall inbound UDP rule for Electron so WebRTC
 // connectivity checks aren't silently dropped. Fails gracefully without admin.
@@ -208,6 +212,27 @@ ipcMain.on('signaling-ice-from-renderer', (_event, { clientId, candidate }: { cl
 })
 
 // ── Extend Display canvas window ──────────────────────────────────────────────
+
+ipcMain.handle('set-stream-source', (_event, sourceId: string) => {
+  currentSourceId = sourceId
+  if (streamInterval) return
+  streamInterval = setInterval(async () => {
+    if (capturing || !currentSourceId || getClients().length === 0) return
+    capturing = true
+    try {
+      const sources = await desktopCapturer.getSources({
+        types: ['screen', 'window'],
+        thumbnailSize: { width: 1280, height: 720 }
+      })
+      const src = sources.find((s) => s.id === currentSourceId)
+      if (src && !src.thumbnail.isEmpty()) {
+        broadcastFrame(src.thumbnail.toJPEG(70))
+      }
+    } catch { /* ignore */ } finally {
+      capturing = false
+    }
+  }, 150)
+})
 
 ipcMain.handle('create-extend-canvas', () => {
   if (extendWindow && !extendWindow.isDestroyed()) {

@@ -64,6 +64,9 @@ const electronAPI = {
     return () => ipcRenderer.removeListener('client-disconnected', handler)
   },
 
+  setStreamSource: (sourceId: string): Promise<void> =>
+    ipcRenderer.invoke('set-stream-source', sourceId),
+
   createExtendCanvas: (): Promise<void> =>
     ipcRenderer.invoke('create-extend-canvas'),
 
