@@ -17,64 +17,77 @@ import { promisify } from 'util'
 
 const execFileAsync = promisify(execFile)
 
-// Objective-C source — forward-declares the CGVirtualDisplay classes so
-// clang accepts the code even though the header isn't in the module map.
-// CoreGraphics.framework exports the symbols at runtime.
+// Objective-C source.
+// CGVirtualDisplayCreate exists in the RUNTIME CoreGraphics.framework on macOS 12.4+
+// but is NOT in the SDK linker stubs, so -framework CoreGraphics alone fails.
+// We use dlsym() to look it up at runtime and objc_msgSend for property setters,
+// which avoids any compile-time or link-time dependency on the private header.
 const OBJC_SOURCE = `
 #import <Foundation/Foundation.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import <objc/runtime.h>
+#import <objc/message.h>
+#import <dlfcn.h>
 
-// Forward-declare CGVirtualDisplay interfaces (public API since macOS 12.4).
-// Not in the Swift/ObjC module map, but present in CoreGraphics at link time.
-@interface CGVirtualDisplayDescriptor : NSObject
-@property CGSize     pixelSize;
-@property CGSize     sizeInMillimeters;
-@property int32_t    maximumFramesPerSecond;
-@property uint32_t   productID;
-@property uint32_t   vendorID;
-@property uint32_t   serialNum;
-@property (copy) NSString *name;
-@end
+typedef CGError (*VDCreateFn)(id descriptor, id *outDisplay, CGDisplayStreamRef *outStream);
 
-@interface CGVirtualDisplay : NSObject
-@property (readonly) CGDirectDisplayID displayID;
-@end
-
-CGError CGVirtualDisplayCreate(CGVirtualDisplayDescriptor *descriptor,
-                                CGVirtualDisplay **outDisplay,
-                                CGDisplayStreamRef *outStream);
+static VDCreateFn findVDCreate(void) {
+    // Search already-loaded images first, then load CoreGraphics explicitly.
+    VDCreateFn fn = (VDCreateFn)dlsym(RTLD_DEFAULT, "CGVirtualDisplayCreate");
+    if (fn) return fn;
+    void *cg = dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_LAZY | RTLD_NOLOAD);
+    if (!cg) cg = dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_LAZY);
+    if (cg) { fn = (VDCreateFn)dlsym(cg, "CGVirtualDisplayCreate"); if (fn) return fn; }
+    // Fallback: CoreDisplay private framework (used by some apps on older macOS)
+    void *cd = dlopen("/System/Library/PrivateFrameworks/CoreDisplay.framework/CoreDisplay", RTLD_LAZY);
+    if (cd) { fn = (VDCreateFn)dlsym(cd, "CGVirtualDisplayCreate"); }
+    return fn;
+}
 
 int main(void) {
     @autoreleasepool {
-        if (@available(macOS 12.4, *)) {
-            CGVirtualDisplayDescriptor *desc = [[CGVirtualDisplayDescriptor alloc] init];
-            desc.name                   = @"SideDisplay";
-            desc.pixelSize              = CGSizeMake(1920, 1080);
-            desc.sizeInMillimeters      = CGSizeMake(530, 300);
-            desc.maximumFramesPerSecond = 60;
-            desc.productID              = 0xCA71;
-            desc.vendorID               = 0xCA71;
-            desc.serialNum              = 1;
-
-            CGVirtualDisplay *vd = nil;
-            CGDisplayStreamRef stream = NULL;
-            CGError err = CGVirtualDisplayCreate(desc, &vd, &stream);
-
-            if (err != kCGErrorSuccess || !vd) {
-                fprintf(stderr, "[vdisplay] CGVirtualDisplayCreate failed (%d)\\n", (int)err);
-                return err ? (int)err : 1;
-            }
-
-            // Print displayID to stdout so the parent knows we are ready
-            printf("%u\\n", vd.displayID);
-            fflush(stdout);
-
-            // Run forever — virtual display lives as long as this process runs
-            [[NSRunLoop mainRunLoop] run];
-        } else {
-            fprintf(stderr, "[vdisplay] requires macOS 12.4+\\n");
+        VDCreateFn vdCreate = findVDCreate();
+        if (!vdCreate) {
+            fprintf(stderr, "[vdisplay] CGVirtualDisplayCreate not found — requires macOS 12.4+\\n");
             return 1;
         }
+
+        Class descClass = NSClassFromString(@"CGVirtualDisplayDescriptor");
+        if (!descClass) {
+            fprintf(stderr, "[vdisplay] CGVirtualDisplayDescriptor not available\\n");
+            return 1;
+        }
+
+        id desc = [[descClass alloc] init];
+
+        // Set properties via objc_msgSend — no private header needed.
+        typedef void (*SetStr)(id, SEL, NSString *);
+        typedef void (*SetSz)(id, SEL, CGSize);
+        typedef void (*SetI32)(id, SEL, int32_t);
+        typedef void (*SetU32)(id, SEL, uint32_t);
+        ((SetStr) objc_msgSend)(desc, sel_registerName("setName:"),                   @"SideDisplay");
+        ((SetSz)  objc_msgSend)(desc, sel_registerName("setPixelSize:"),              CGSizeMake(1920, 1080));
+        ((SetSz)  objc_msgSend)(desc, sel_registerName("setSizeInMillimeters:"),      CGSizeMake(530, 300));
+        ((SetI32) objc_msgSend)(desc, sel_registerName("setMaximumFramesPerSecond:"), (int32_t)60);
+        ((SetU32) objc_msgSend)(desc, sel_registerName("setProductID:"),              (uint32_t)0xCA71);
+        ((SetU32) objc_msgSend)(desc, sel_registerName("setVendorID:"),               (uint32_t)0xCA71);
+        ((SetU32) objc_msgSend)(desc, sel_registerName("setSerialNum:"),              (uint32_t)1);
+
+        id vd = nil;
+        CGDisplayStreamRef stream = NULL;
+        CGError err = vdCreate(desc, &vd, &stream);
+
+        if (err != kCGErrorSuccess || !vd) {
+            fprintf(stderr, "[vdisplay] CGVirtualDisplayCreate returned error %d\\n", (int)err);
+            return err ? (int)err : 1;
+        }
+
+        typedef CGDirectDisplayID (*GetDID)(id, SEL);
+        CGDirectDisplayID did = ((GetDID)objc_msgSend)(vd, sel_registerName("displayID"));
+        printf("%u\\n", did);
+        fflush(stdout);
+
+        [[NSRunLoop mainRunLoop] run];
     }
     return 0;
 }
