@@ -1,8 +1,12 @@
 /**
  * macOS virtual display helper.
- * Compiles and spawns a Swift binary that calls CGVirtualDisplayCreate,
+ * Compiles and spawns an Objective-C binary that calls CGVirtualDisplayCreate,
  * which registers a real monitor with the OS (macOS 12.4+).
  * The virtual display stays alive as long as this process runs.
+ *
+ * Note: CGVirtualDisplay.h is in CoreGraphics.framework but is NOT in the Swift
+ * module map, so Swift's `import CoreGraphics` can't see it. We use Objective-C
+ * with forward-declared @interfaces instead — the symbols are present at link time.
  */
 
 import { app } from 'electron'
@@ -13,42 +17,66 @@ import { promisify } from 'util'
 
 const execFileAsync = promisify(execFile)
 
-// Swift source embedded here so no external resource file is needed.
-const SWIFT_SOURCE = `
-import Foundation
-import CoreGraphics
+// Objective-C source — forward-declares the CGVirtualDisplay classes so
+// clang accepts the code even though the header isn't in the module map.
+// CoreGraphics.framework exports the symbols at runtime.
+const OBJC_SOURCE = `
+#import <Foundation/Foundation.h>
+#import <CoreGraphics/CoreGraphics.h>
 
-// CGVirtualDisplay is public API since macOS 12.4 (CoreGraphics framework).
-// The virtual display exists as long as this process runs.
+// Forward-declare CGVirtualDisplay interfaces (public API since macOS 12.4).
+// Not in the Swift/ObjC module map, but present in CoreGraphics at link time.
+@interface CGVirtualDisplayDescriptor : NSObject
+@property CGSize     pixelSize;
+@property CGSize     sizeInMillimeters;
+@property int32_t    maximumFramesPerSecond;
+@property uint32_t   productID;
+@property uint32_t   vendorID;
+@property uint32_t   serialNum;
+@property (copy) NSString *name;
+@end
 
-if #available(macOS 12.4, *) {
-    let desc = CGVirtualDisplayDescriptor()
-    desc.name = "SideDisplay"
-    desc.pixelSize          = CGSize(width: 1920, height: 1080)
-    desc.sizeInMillimeters  = CGSize(width: 530,  height: 300)   // ~24" equiv.
-    desc.maximumFramesPerSecond = 60
-    desc.productID = 0xCA71
-    desc.vendorID  = 0xCA71
-    desc.serialNum = 1
+@interface CGVirtualDisplay : NSObject
+@property (readonly) CGDirectDisplayID displayID;
+@end
 
-    var vd:     CGVirtualDisplay?
-    var stream: CGDisplayStream?
+CGError CGVirtualDisplayCreate(CGVirtualDisplayDescriptor *descriptor,
+                                CGVirtualDisplay **outDisplay,
+                                CGDisplayStreamRef *outStream);
 
-    let err = CGVirtualDisplayCreate(desc, &vd, &stream)
-    guard err == .success, let display = vd else {
-        fputs("[vdisplay] CGVirtualDisplayCreate failed (\\(err.rawValue))\\n", stderr)
-        exit(Int32(err.rawValue == 0 ? 1 : err.rawValue))
+int main(void) {
+    @autoreleasepool {
+        if (@available(macOS 12.4, *)) {
+            CGVirtualDisplayDescriptor *desc = [[CGVirtualDisplayDescriptor alloc] init];
+            desc.name                   = @"SideDisplay";
+            desc.pixelSize              = CGSizeMake(1920, 1080);
+            desc.sizeInMillimeters      = CGSizeMake(530, 300);
+            desc.maximumFramesPerSecond = 60;
+            desc.productID              = 0xCA71;
+            desc.vendorID               = 0xCA71;
+            desc.serialNum              = 1;
+
+            CGVirtualDisplay *vd = nil;
+            CGDisplayStreamRef stream = NULL;
+            CGError err = CGVirtualDisplayCreate(desc, &vd, &stream);
+
+            if (err != kCGErrorSuccess || !vd) {
+                fprintf(stderr, "[vdisplay] CGVirtualDisplayCreate failed (%d)\\n", (int)err);
+                return err ? (int)err : 1;
+            }
+
+            // Print displayID to stdout so the parent knows we are ready
+            printf("%u\\n", vd.displayID);
+            fflush(stdout);
+
+            // Run forever — virtual display lives as long as this process runs
+            [[NSRunLoop mainRunLoop] run];
+        } else {
+            fprintf(stderr, "[vdisplay] requires macOS 12.4+\\n");
+            return 1;
+        }
     }
-
-    // Emit displayID so the parent knows it's ready
-    print("\\(display.displayID)")
-    fflush(stdout)
-
-    // Keep the run loop alive — display disappears when process exits
-    RunLoop.main.run()
-} else {
-    fputs("[vdisplay] CGVirtualDisplay requires macOS 12.4+\\n", stderr)
-    exit(1)
+    return 0;
 }
 `
 
@@ -59,34 +87,34 @@ function binaryPath(): string {
 }
 
 function sourcePath(): string {
-  return join(app.getPath('userData'), 'SideDisplay-vdisplay.swift')
+  return join(app.getPath('userData'), 'SideDisplay-vdisplay.m')
 }
 
 async function ensureCompiled(): Promise<boolean> {
   const bin = binaryPath()
   const src = sourcePath()
 
-  writeFileSync(src, SWIFT_SOURCE.trim(), 'utf8')
+  writeFileSync(src, OBJC_SOURCE.trim(), 'utf8')
 
   if (existsSync(bin)) return true
 
-  console.log('[vdisplay] Compiling Swift helper (one-time, ~10 s)…')
+  console.log('[vdisplay] Compiling ObjC helper (one-time)…')
   try {
-    await execFileAsync('swiftc', [src, '-o', bin, '-O'], { timeout: 60_000 })
+    await execFileAsync('clang', [
+      src, '-o', bin,
+      '-framework', 'CoreGraphics',
+      '-framework', 'Foundation',
+      '-fobjc-arc'
+    ], { timeout: 60_000 })
     chmodSync(bin, '755')
     console.log('[vdisplay] Compiled OK')
     return true
   } catch (e) {
-    console.warn('[vdisplay] swiftc failed:', (e as Error).message)
+    console.warn('[vdisplay] clang failed:', (e as Error).message)
     return false
   }
 }
 
-/**
- * Start the virtual display helper.
- * Returns the CGDirectDisplayID string on success, null on failure.
- * The returned promise resolves once the display is registered (~1 s).
- */
 export async function startVirtualDisplay(): Promise<string | null> {
   if (process.platform !== 'darwin') return null
 
@@ -121,7 +149,6 @@ export async function startVirtualDisplay(): Promise<string | null> {
       vdProc = null
     })
 
-    // If no stdout in 15 s, give up (compilation already done so this is a real error)
     setTimeout(() => {
       if (!resolved) { resolved = true; resolve(null) }
     }, 15_000)
