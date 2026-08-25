@@ -64,7 +64,7 @@ function tryAddWindowsFirewallRule(): void {
   const exe = process.execPath
   execFile('netsh', [
     'advfirewall', 'firewall', 'add', 'rule',
-    'name=CarDisplay WebRTC UDP', 'dir=in', 'action=allow',
+    'name=SideDisplay WebRTC UDP', 'dir=in', 'action=allow',
     'protocol=UDP', `program=${exe}`, 'enable=yes'
   ], (err, _out, stderr) => {
     if (err) {
@@ -140,10 +140,10 @@ async function checkMacPermissions(): Promise<void> {
     const { response } = await dialog.showMessageBox({
       type: 'warning',
       title: 'Screen Recording Permission Required',
-      message: 'CarDisplay needs Screen Recording access to stream your screen.',
+      message: 'SideDisplay needs Screen Recording access to stream your screen.',
       detail:
         'Go to System Settings → Privacy & Security → Screen Recording, ' +
-        'enable CarDisplay, then restart the app.',
+        'enable SideDisplay, then restart the app.',
       buttons: ['Open System Settings', 'Later'],
       defaultId: 0,
       cancelId: 1
@@ -164,7 +164,7 @@ async function checkMacPermissions(): Promise<void> {
       message: 'Enable touch-to-mouse control?',
       detail:
         'To forward touch events from the browser to your Mac\'s cursor, ' +
-        'go to System Settings → Privacy & Security → Accessibility and enable CarDisplay.',
+        'go to System Settings → Privacy & Security → Accessibility and enable SideDisplay.',
       buttons: ['Open System Settings', 'Skip'],
       defaultId: 0,
       cancelId: 1

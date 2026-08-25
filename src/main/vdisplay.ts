@@ -23,7 +23,7 @@ import CoreGraphics
 
 if #available(macOS 12.4, *) {
     let desc = CGVirtualDisplayDescriptor()
-    desc.name = "CarDisplay"
+    desc.name = "SideDisplay"
     desc.pixelSize          = CGSize(width: 1920, height: 1080)
     desc.sizeInMillimeters  = CGSize(width: 530,  height: 300)   // ~24" equiv.
     desc.maximumFramesPerSecond = 60
@@ -55,11 +55,11 @@ if #available(macOS 12.4, *) {
 let vdProc: ChildProcess | null = null
 
 function binaryPath(): string {
-  return join(app.getPath('userData'), 'CarDisplay-vdisplay')
+  return join(app.getPath('userData'), 'SideDisplay-vdisplay')
 }
 
 function sourcePath(): string {
-  return join(app.getPath('userData'), 'CarDisplay-vdisplay.swift')
+  return join(app.getPath('userData'), 'SideDisplay-vdisplay.swift')
 }
 
 async function ensureCompiled(): Promise<boolean> {

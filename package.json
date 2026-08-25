@@ -1,5 +1,5 @@
 {
-  "name": "car-display",
+  "name": "side-display",
   "version": "1.0.0",
   "description": "Wireless second monitor — stream your screen to any WebRTC browser over local Wi-Fi",
   "main": "out/main/index.js",

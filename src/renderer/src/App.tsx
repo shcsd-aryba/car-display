@@ -30,7 +30,7 @@ export default function App() {
 
   useEffect(() => {
     const removeVd = window.electronAPI.onVirtualDisplayReady(() => {
-      // Virtual display registered with macOS — refresh so "CarDisplay" appears in the list
+      // Virtual display registered with macOS — refresh so "SideDisplay" appears in the list
       refreshSources()
     })
     return removeVd

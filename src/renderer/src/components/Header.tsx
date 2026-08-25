@@ -23,7 +23,7 @@ export default function Header({ serverInfo, clientCount }: Props) {
               </linearGradient>
             </defs>
           </svg>
-          <span style={styles.logoText}>CarDisplay</span>
+          <span style={styles.logoText}>SideDisplay</span>
         </div>
       </div>
 
