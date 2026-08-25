@@ -8,6 +8,7 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "rebuild-native": "electron-rebuild -f -w @nut-tree-fork/nut-js",
+    "build:addon": "electron-rebuild -f -w side-display",
     "package:mac": "electron-builder --mac",
     "package:win": "electron-builder --win"
   },
@@ -31,6 +32,7 @@
     "electron": "^28.2.0",
     "electron-builder": "^24.9.1",
     "electron-vite": "^2.0.0",
+    "node-addon-api": "^8.9.2",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "typescript": "^5.3.3",
